@@ -1,5 +1,9 @@
 # Analyze Stage Template
 # Fetches work item, runs OpenCode analysis, posts results
+#
+# Supports both standalone and submodule modes:
+# - Standalone: scripts in ./scripts/, systems in ./systems/
+# - Submodule: scripts in ./template/scripts/, systems in ./systems/ + ./template/systems/
 
 parameters:
   - name: workItemId
@@ -17,28 +21,41 @@ jobs:
     steps:
       - checkout: self
         displayName: 'Checkout repository'
+        submodules: true
 
       - script: |
-          chmod +x scripts/*.sh
-        displayName: 'Make scripts executable'
-
-      # OpenCode runs via Docker container - no installation needed
+          # Detect submodule mode
+          if [ -d "template/scripts" ]; then
+            SCRIPTS="template/scripts"
+            SUBMODULE_MODE="true"
+            echo "Running in submodule mode"
+          else
+            SCRIPTS="scripts"
+            SUBMODULE_MODE="false"
+            echo "Running in standalone mode"
+          fi
+          chmod +x $SCRIPTS/*.sh scripts/*.sh 2>/dev/null || true
+          echo "##vso[task.setvariable variable=SCRIPTS_DIR]$SCRIPTS"
+          echo "##vso[task.setvariable variable=SUBMODULE_MODE]$SUBMODULE_MODE"
+        displayName: 'Detect environment'
 
       - script: |
+          SCRIPTS="$(SCRIPTS_DIR)"
           # Remove ai-ready tag (ai-working already added in Process stage)
-          ./scripts/update-workitem.sh \
+          ./$SCRIPTS/update-workitem.sh \
             --work-item-id "$(WORK_ITEM_ID)" \
             --remove-tag "ai-ready"
         displayName: 'Update work item status'
         env:
-          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
           AZURE_DEVOPS_PROJECT: $(System.TeamProject)
           AZURE_DEVOPS_PAT: $(System.AccessToken)
 
       - script: |
+          SCRIPTS="$(SCRIPTS_DIR)"
           # Fetch work item context and download attachments
           mkdir -p attachments
-          ./scripts/get-workitem-context.sh \
+          ./$SCRIPTS/get-workitem-context.sh \
             --work-item-id "${{ parameters.workItemId }}" \
             --output "workitem-context.json" \
             --attachments-dir "attachments"
@@ -48,79 +65,120 @@ jobs:
           ls -la attachments/ 2>/dev/null || echo "  (none)"
         displayName: 'Fetch work item context and attachments'
         env:
-          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
           AZURE_DEVOPS_PROJECT: $(System.TeamProject)
           AZURE_DEVOPS_PAT: $(System.AccessToken)
 
       - script: |
-          # Resolve which system configuration to use
-          SYSTEM=$(./scripts/resolve-system-config.sh --context-file workitem-context.json)
+          SCRIPTS="$(SCRIPTS_DIR)"
+          SUBMODULE_MODE="$(SUBMODULE_MODE)"
+
+          # Build systems-dir arguments based on mode
+          if [ "$SUBMODULE_MODE" = "true" ]; then
+            SYSTEM=$(./$SCRIPTS/resolve-system-config.sh \
+              --context-file workitem-context.json \
+              --systems-dir systems \
+              --systems-dir template/systems)
+          else
+            SYSTEM=$(./$SCRIPTS/resolve-system-config.sh \
+              --context-file workitem-context.json)
+          fi
           echo "Detected system: $SYSTEM"
           echo "##vso[task.setvariable variable=DETECTED_SYSTEM]$SYSTEM"
 
-          # Copy OpenCode config to workspace root (where OpenCode expects it)
-          cp systems/_default/opencode.json ./opencode.json
-          if [ -f "systems/$SYSTEM/opencode.json" ]; then
-            echo "Note: System-specific opencode.json found but merging not yet implemented"
+          # Copy OpenCode config to workspace root
+          # Priority: local systems > template systems
+          if [ -f "systems/_default/opencode.json" ]; then
+            cp systems/_default/opencode.json ./opencode.json
+            echo "Using local opencode.json"
+          elif [ -f "template/systems/_default/opencode.json" ]; then
+            cp template/systems/_default/opencode.json ./opencode.json
+            echo "Using template opencode.json"
           fi
 
-          # Load skills: always load default, then system-specific
+          # Load skills in layers
           rm -rf .opencode/skills
           mkdir -p .opencode/skills
 
-          # Copy default skills
-          if [ -d "systems/_default/skills" ]; then
-            echo "Loading default skills..."
-            cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
-            ls .opencode/skills/
+          if [ "$SUBMODULE_MODE" = "true" ]; then
+            # 1. Template default skills (generic base)
+            if [ -d "template/systems/_default/skills" ]; then
+              echo "Loading template default skills..."
+              cp -r template/systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            fi
+
+            # 2. Local default skills (organization-specific, can override template)
+            if [ -d "systems/_default/skills" ]; then
+              echo "Loading organization-specific skills..."
+              cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            fi
+
+            # 3. System-specific skills from both locations
+            for systems_dir in template/systems systems; do
+              if [ -d "$systems_dir/$SYSTEM/skills" ] && [ "$(ls -A $systems_dir/$SYSTEM/skills 2>/dev/null)" ]; then
+                echo "Loading skills from $systems_dir/$SYSTEM..."
+                cp -r $systems_dir/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
+              fi
+            done
+          else
+            # Standalone mode: simple loading
+            if [ -d "systems/_default/skills" ]; then
+              echo "Loading default skills..."
+              cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            fi
+            if [ -d "systems/$SYSTEM/skills" ] && [ "$(ls -A systems/$SYSTEM/skills 2>/dev/null)" ]; then
+              echo "Loading skills from system: $SYSTEM"
+              cp -r systems/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
+            fi
           fi
 
-          # Copy system-specific skills (can override defaults)
-          if [ -d "systems/$SYSTEM/skills" ] && [ "$(ls -A systems/$SYSTEM/skills 2>/dev/null)" ]; then
-            echo "Loading skills from system: $SYSTEM"
-            cp -r systems/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
-          fi
+          echo "Loaded skills:"
+          ls .opencode/skills/ 2>/dev/null || echo "  (none)"
         displayName: 'Resolve system configuration'
 
       - script: |
-          # Build complete prompt using system-specific context
+          SCRIPTS="$(SCRIPTS_DIR)"
+          SUBMODULE_MODE="$(SUBMODULE_MODE)"
           SYSTEM="$(DETECTED_SYSTEM)"
 
-          PROMPT=$(./scripts/build-prompt.sh \
-            --mode analyze \
-            --system "$SYSTEM" \
-            --context workitem-context.json)
+          # Build prompt with appropriate systems-dir arguments
+          if [ "$SUBMODULE_MODE" = "true" ]; then
+            PROMPT=$(./$SCRIPTS/build-prompt.sh \
+              --mode analyze \
+              --system "$SYSTEM" \
+              --context workitem-context.json \
+              --systems-dir systems \
+              --systems-dir template/systems)
+          else
+            PROMPT=$(./$SCRIPTS/build-prompt.sh \
+              --mode analyze \
+              --system "$SYSTEM" \
+              --context workitem-context.json)
+          fi
 
-          # Log what we're sending to OpenCode for debugging/optimization
+          # Log what we're sending to OpenCode
           echo "=============================================="
           echo "OPENCODE INPUT - ANALYZE MODE"
           echo "=============================================="
           echo "System: $SYSTEM"
+          echo "Submodule Mode: $SUBMODULE_MODE"
           echo ""
           echo "--- PROMPT ---"
           echo "$PROMPT"
           echo ""
-          echo "--- CONFIGURATION ---"
-          echo "Docker Image: jspannareif/opencode-mcp"
-          echo "Mode: run (non-interactive)"
-          echo ""
-          echo "--- OPENCODE CONFIG (opencode.json) ---"
+          echo "--- OPENCODE CONFIG ---"
           cat ./opencode.json
           echo ""
-          echo "Model: $(jq -r '.model // "not specified"' ./opencode.json)"
-          echo "MCP Servers: $(jq -r '.mcp | keys | join(", ")' ./opencode.json)"
-          echo ""
           echo "=============================================="
-          echo ""
 
           # Create OpenCode auth directory and inject auth.json
           mkdir -p $HOME/.local/share/opencode
           echo "$OPENCODE_AUTH_JSON" > $HOME/.local/share/opencode/auth.json
 
-          # Use gpt-4.1 for analysis (has vision for images/attachments)
+          # Run OpenCode with vision model for image analysis
           docker run --rm \
             -e ADO_MCP_AUTH_TOKEN \
-            -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/your-org" \
+            -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/$AZURE_DEVOPS_ORG" \
             -v "$HOME/.local/share/opencode:/root/.local/share/opencode" \
             -v "$(pwd):/workspace" \
             -w /workspace \
@@ -129,31 +187,34 @@ jobs:
         env:
           OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)
           ADO_MCP_AUTH_TOKEN: $(System.AccessToken)
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
 
       - script: |
+          SCRIPTS="$(SCRIPTS_DIR)"
           # Post analysis as work item comment
           ANALYSIS=$(cat analysis-result.md)
 
-          ./scripts/update-workitem.sh \
+          ./$SCRIPTS/update-workitem.sh \
             --work-item-id "${{ parameters.workItemId }}" \
             --add-comment "$ANALYSIS" \
             --remove-tag "ai-working"
         displayName: 'Post analysis to work item'
         env:
-          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
           AZURE_DEVOPS_PROJECT: $(System.TeamProject)
           AZURE_DEVOPS_PAT: $(System.AccessToken)
 
       - script: |
+          SCRIPTS="$(SCRIPTS_DIR)"
           # Notify on failure
           if [ "$AGENT_JOBSTATUS" == "Failed" ]; then
-            ./scripts/send-teams-notification.sh \
+            ./$SCRIPTS/send-teams-notification.sh \
               --type "error" \
               --work-item-id "${{ parameters.workItemId }}" \
               --message "Analysis stage failed" \
               --pipeline-url "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)"
 
-            ./scripts/update-workitem.sh \
+            ./$SCRIPTS/update-workitem.sh \
               --work-item-id "${{ parameters.workItemId }}" \
               --add-tag "ai-failed" \
               --remove-tag "ai-working"
@@ -161,7 +222,7 @@ jobs:
         displayName: 'Handle failure'
         condition: failed()
         env:
-          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
           AZURE_DEVOPS_PROJECT: $(System.TeamProject)
           AZURE_DEVOPS_PAT: $(System.AccessToken)
           TEAMS_WEBHOOK_URL: $(TEAMS_WEBHOOK_URL)

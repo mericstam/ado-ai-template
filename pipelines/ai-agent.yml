@@ -1,5 +1,10 @@
 # Azure DevOps AI Agent Pipeline
 # Triggered by incoming webhook from service hook when work item is updated
+#
+# Required pipeline variables:
+#   AZURE_DEVOPS_ORG - Your Azure DevOps organization name (e.g., "my-org")
+#   OPENCODE_AUTH_JSON - OpenCode authentication JSON
+#   TEAMS_WEBHOOK_URL - (Optional) Teams webhook for notifications
 
 resources:
   webhooks:
@@ -86,25 +91,36 @@ stages:
           - checkout: self
             displayName: 'Checkout for scripts'
             condition: and(succeeded(), ne(variables['webhook.ACTION'], 'skip'))
+            submodules: true
 
           - script: |
-              chmod +x scripts/*.sh
-            displayName: 'Make scripts executable'
+              # Detect submodule mode and set script path
+              if [ -d "template/scripts" ]; then
+                SCRIPTS="template/scripts"
+                echo "Running in submodule mode"
+              else
+                SCRIPTS="scripts"
+                echo "Running in standalone mode"
+              fi
+              chmod +x $SCRIPTS/*.sh scripts/*.sh 2>/dev/null || true
+              echo "##vso[task.setvariable variable=SCRIPTS_DIR]$SCRIPTS"
+            displayName: 'Detect environment and make scripts executable'
             condition: and(succeeded(), ne(variables['webhook.ACTION'], 'skip'))
 
           - script: |
               ACTION="$(webhook.ACTION)"
               WORK_ITEM_ID="$(webhook.WORK_ITEM_ID)"
+              SCRIPTS="$(SCRIPTS_DIR)"
 
               # Add ai-working tag
-              ./scripts/update-workitem.sh \
+              ./$SCRIPTS/update-workitem.sh \
                 --work-item-id "$WORK_ITEM_ID" \
                 --add-tag "ai-working"
 
               # For command actions (triggered by @ai comment), add a reaction
               # instead of creating a new comment to reduce noise
               if [ "$ACTION" = "command" ]; then
-                ./scripts/update-workitem.sh \
+                ./$SCRIPTS/update-workitem.sh \
                   --work-item-id "$WORK_ITEM_ID" \
                   --add-reaction "like" \
                   --reaction-comment-pattern "@ai"
@@ -112,7 +128,7 @@ stages:
             displayName: 'Notify user - AI Agent started'
             condition: and(succeeded(), ne(variables['webhook.ACTION'], 'skip'))
             env:
-              AZURE_DEVOPS_ORG: your-org
+              AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
               AZURE_DEVOPS_PROJECT: $(System.TeamProject)
               AZURE_DEVOPS_PAT: $(System.AccessToken)
 
