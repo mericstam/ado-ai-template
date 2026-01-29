@@ -1,8 +1,9 @@
 # Azure DevOps AI Agent Pipeline
 # Triggered by incoming webhook from service hook when work item is updated
 #
+# Org is auto-detected from System.CollectionUri
+#
 # Required pipeline variables:
-#   AZURE_DEVOPS_ORG - Your Azure DevOps organization name (e.g., "my-org")
 #   OPENCODE_AUTH_JSON - OpenCode authentication JSON
 #   TEAMS_WEBHOOK_URL - (Optional) Teams webhook for notifications
 
@@ -94,6 +95,10 @@ stages:
             submodules: true
 
           - script: |
+              # Auto-detect org from System.CollectionUri
+              export AZURE_DEVOPS_ORG=$(echo "$SYSTEM_COLLECTIONURI" | sed 's|https://dev.azure.com/||' | sed 's|/$||')
+              echo "##vso[task.setvariable variable=AZURE_DEVOPS_ORG]$AZURE_DEVOPS_ORG"
+
               # Detect submodule mode and set script path
               if [ -d "template/scripts" ]; then
                 SCRIPTS="template/scripts"
@@ -104,8 +109,10 @@ stages:
               fi
               chmod +x $SCRIPTS/*.sh scripts/*.sh 2>/dev/null || true
               echo "##vso[task.setvariable variable=SCRIPTS_DIR]$SCRIPTS"
-            displayName: 'Detect environment and make scripts executable'
+            displayName: 'Detect environment'
             condition: and(succeeded(), ne(variables['webhook.ACTION'], 'skip'))
+            env:
+              SYSTEM_COLLECTIONURI: $(System.CollectionUri)
 
           - script: |
               ACTION="$(webhook.ACTION)"
@@ -118,7 +125,6 @@ stages:
                 --add-tag "ai-working"
 
               # For command actions (triggered by @ai comment), add a reaction
-              # instead of creating a new comment to reduce noise
               if [ "$ACTION" = "command" ]; then
                 ./$SCRIPTS/update-workitem.sh \
                   --work-item-id "$WORK_ITEM_ID" \
