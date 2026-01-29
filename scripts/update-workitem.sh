@@ -475,20 +475,45 @@ if [ -n "$DELETE_COMMENT_ID" ]; then
 fi
 
 # Upsert comment: find existing with marker and update, or create new
+# IMPORTANT: Only update if the comment was created by Build Service (we can only update our own comments)
 if [ -n "$UPSERT_MARKER" ] && [ -n "$ADD_COMMENT" ]; then
-    # Search for existing comment with the marker (ignore errors if not found)
-    EXISTING_COMMENT_ID=$(get_comment_id_with_pattern "$UPSERT_MARKER" 2>/dev/null || true)
-
     # Prepend marker as small badge at top of comment
     COMMENT_WITH_MARKER="**[$UPSERT_MARKER]**
 
 ${ADD_COMMENT}"
 
+    # Search for existing comment with the marker that we can update (created by Build Service)
+    COMMENTS_RESPONSE=$(curl -s -X GET \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        "$BASE_URL/wit/workitems/$WORK_ITEM_ID/comments?api-version=7.1-preview.4&\$top=50&order=desc")
+
+    # Find comment with marker that was created by Build Service (we can only update our own comments)
+    EXISTING_COMMENT_ID=$(echo "$COMMENTS_RESPONSE" | jq -r --arg pat "$UPSERT_MARKER" '
+        .comments[] |
+        select(
+            (.text | test($pat; "i")) and
+            (.createdBy.displayName | test("Build Service"; "i"))
+        ) |
+        .id
+    ' | head -n 1)
+
     if [ -n "$EXISTING_COMMENT_ID" ]; then
         echo "Updating existing comment $EXISTING_COMMENT_ID (found marker: $UPSERT_MARKER)"
         update_comment "$EXISTING_COMMENT_ID" "$COMMENT_WITH_MARKER"
     else
-        echo "Creating new comment with marker: $UPSERT_MARKER"
+        # Check if there's a comment with the marker from someone else (can't update, will create new)
+        OTHER_COMMENT_ID=$(echo "$COMMENTS_RESPONSE" | jq -r --arg pat "$UPSERT_MARKER" '
+            .comments[] |
+            select(.text | test($pat; "i")) |
+            .id
+        ' | head -n 1)
+
+        if [ -n "$OTHER_COMMENT_ID" ]; then
+            echo "Found comment with marker created by another user (cannot update). Creating new comment."
+        else
+            echo "Creating new comment with marker: $UPSERT_MARKER"
+        fi
         add_comment "$COMMENT_WITH_MARKER"
     fi
 # Update existing comment (use with --add-comment for new text)
