@@ -62,6 +62,25 @@ jobs:
 
       - script: |
           SCRIPTS="$(SCRIPTS_DIR)"
+          # Post "working" indicator comment (will be updated with result)
+          WORKING_MSG="## AI Analysis in Progress
+
+          Analyzing work item and attachments...
+
+          *This comment will be updated with the analysis result.*"
+
+          ./$SCRIPTS/update-workitem.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --upsert-comment "AI-ANALYSIS" \
+            --add-comment "$WORKING_MSG"
+        displayName: 'Post working indicator'
+        env:
+          AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          SCRIPTS="$(SCRIPTS_DIR)"
           # Fetch work item context and download attachments
           mkdir -p attachments
           ./$SCRIPTS/get-workitem-context.sh \

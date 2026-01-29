@@ -670,6 +670,21 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
+# Post "working" indicator for analyze mode (will be updated with result)
+if [ "$MODE" = "analyze" ] && [ -n "$WORK_ITEM_ID" ]; then
+    log "Posting 'working' indicator to work item..."
+    WORKING_MSG="## AI Analysis in Progress
+
+Analyzing work item and attachments...
+
+*This comment will be updated with the analysis result.*"
+
+    ./$SCRIPTS/update-workitem.sh \
+        --work-item-id "$WORK_ITEM_ID" \
+        --upsert-comment "AI-ANALYSIS" \
+        --add-comment "$WORKING_MSG" 2>/dev/null || log_warn "Could not post working indicator"
+fi
+
 section "9. RUN OPENCODE"
 
 # Handle auth
@@ -738,6 +753,21 @@ section "10. RESULT"
 if [ -f "$REPO_ROOT/result.md" ]; then
     cat "$REPO_ROOT/result.md"
     log_success "Result saved to result.md"
+
+    # Update work item comment with result (for analyze mode)
+    if [ "$MODE" = "analyze" ] && [ -n "$WORK_ITEM_ID" ]; then
+        log "Updating work item comment with analysis result..."
+        ANALYSIS=$(cat "$REPO_ROOT/result.md")
+        ANALYSIS_WITH_FOOTER="${ANALYSIS}
+
+---
+*Agent: analyze*"
+
+        ./$SCRIPTS/update-workitem.sh \
+            --work-item-id "$WORK_ITEM_ID" \
+            --upsert-comment "AI-ANALYSIS" \
+            --add-comment "$ANALYSIS_WITH_FOOTER" 2>/dev/null && log_success "Work item comment updated" || log_warn "Could not update work item comment"
+    fi
 else
     log_error "No result file generated"
     exit 1

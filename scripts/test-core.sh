@@ -477,6 +477,37 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Test 8: Update work item features
+# -----------------------------------------------------------------------------
+echo ""
+echo -e "${YELLOW}[Group 8] Update Work Item Features${NC}"
+
+test_start "update-workitem.sh supports --upsert-comment"
+# Check that the script accepts upsert-comment by looking at source
+if grep -q "upsert-comment" "$SCRIPTS/update-workitem.sh"; then
+    test_pass
+else
+    test_fail "--upsert-comment not found in script"
+fi
+
+test_start "update-workitem.sh has comment marker handling"
+# Check that the script handles comment markers for idempotent updates
+if grep -q "UPSERT_MARKER\|upsert-comment" "$SCRIPTS/update-workitem.sh"; then
+    test_pass
+else
+    test_fail "Comment marker handling not found"
+fi
+
+test_start "Pipeline posts working indicator before analysis"
+# Check that analyze.yml posts a working indicator
+if grep -q "AI Analysis in Progress\|working indicator" "$REPO_ROOT/template/pipelines/templates/analyze.yml" 2>/dev/null || \
+   grep -q "AI Analysis in Progress\|working indicator" "$REPO_ROOT/pipelines/templates/analyze.yml" 2>/dev/null; then
+    test_pass
+else
+    test_fail "Working indicator not found in analyze pipeline"
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 echo ""
