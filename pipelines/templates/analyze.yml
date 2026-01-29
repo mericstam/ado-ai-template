@@ -257,8 +257,8 @@ jobs:
           # Add agent signature to footer
           ANALYSIS_WITH_FOOTER="${ANALYSIS}
 
----
-*Agent: analyze*"
+          ---
+          *Agent: analyze*"
 
           ./$SCRIPTS/update-workitem.sh \
             --work-item-id "${{ parameters.workItemId }}" \

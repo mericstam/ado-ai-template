@@ -254,8 +254,8 @@ jobs:
           # Add agent signature to footer
           RESULT_WITH_FOOTER="${RESULT}
 
----
-*Agent: command*"
+          ---
+          *Agent: command*"
 
           ./$SCRIPTS/update-workitem.sh \
             --work-item-id "${{ parameters.workItemId }}" \
