@@ -249,6 +249,7 @@ COMMENTS_JSON=$(echo "$COMMENTS_RESPONSE" | jq '[
         id: .id,
         author: .createdBy.displayName,
         date: .createdDate,
+        modifiedDate: .modifiedDate,
         text: .text
     }
 ]' 2>/dev/null || echo "[]")
