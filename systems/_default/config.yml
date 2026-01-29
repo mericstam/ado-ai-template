@@ -1,0 +1,30 @@
+# Default System Configuration
+# Used when no specific system is matched
+
+name: default
+description: Default configuration for unclassified work items
+
+repositories:
+  # Explicit list of repository names (union with prefix)
+  names: []
+  # Match all repos starting with prefix (union with names)
+  prefix: ""
+
+# No detection rules - this is the fallback
+detection:
+  fallback: true
+
+quality_gates:
+  build:
+    command: "npm run build"
+    required: true
+    description: "Build must complete without errors"
+  test:
+    command: "npm test"
+    required: true
+    coverage_min: 80
+    description: "All tests must pass with minimum 80% coverage"
+  lint:
+    command: "npm run lint"
+    required: true
+    description: "Code must pass linting rules"

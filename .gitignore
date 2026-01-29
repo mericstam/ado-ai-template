@@ -1,0 +1,27 @@
+# Environment / secrets
+.env
+.env.*
+*.env
+
+# Node
+node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp files
+tmpclaude-*
+.temp/
+.opencode/

@@ -1,0 +1,167 @@
+# Command Stage Template
+# Executes custom AI commands from @ai mentions in comments
+
+parameters:
+  - name: workItemId
+    type: string
+  - name: command
+    type: string
+
+jobs:
+  - job: ExecuteCommand
+    displayName: 'Execute AI Command'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - checkout: self
+        displayName: 'Checkout repository'
+
+      - script: |
+          chmod +x scripts/*.sh
+        displayName: 'Make scripts executable'
+
+      - script: |
+          # Fetch work item context and download attachments
+          mkdir -p attachments
+          ./scripts/get-workitem-context.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --output "workitem-context.json" \
+            --attachments-dir "attachments"
+
+          # List downloaded attachments
+          echo "Attachments downloaded:"
+          ls -la attachments/ 2>/dev/null || echo "  (none)"
+        displayName: 'Fetch work item context and attachments'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Resolve which system configuration to use
+          SYSTEM=$(./scripts/resolve-system-config.sh --context-file workitem-context.json)
+          echo "Detected system: $SYSTEM"
+          echo "##vso[task.setvariable variable=DETECTED_SYSTEM]$SYSTEM"
+
+          # Copy OpenCode config to workspace root (where OpenCode expects it)
+          cp systems/_default/opencode.json ./opencode.json
+          if [ -f "systems/$SYSTEM/opencode.json" ]; then
+            echo "Note: System-specific opencode.json found but merging not yet implemented"
+          fi
+
+          # Load skills: always load default, then system-specific
+          rm -rf .opencode/skills
+          mkdir -p .opencode/skills
+
+          # Copy default skills
+          if [ -d "systems/_default/skills" ]; then
+            echo "Loading default skills..."
+            cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            ls .opencode/skills/
+          fi
+
+          # Copy system-specific skills (can override defaults)
+          if [ -d "systems/$SYSTEM/skills" ] && [ "$(ls -A systems/$SYSTEM/skills 2>/dev/null)" ]; then
+            echo "Loading skills from system: $SYSTEM"
+            cp -r systems/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
+          fi
+        displayName: 'Resolve system configuration'
+
+      - script: |
+          # Build complete prompt using system-specific context
+          SYSTEM="$(DETECTED_SYSTEM)"
+          COMMAND="${{ parameters.command }}"
+
+          PROMPT=$(./scripts/build-prompt.sh \
+            --mode command \
+            --system "$SYSTEM" \
+            --context workitem-context.json \
+            --command "$COMMAND")
+
+          # Log what we're sending to OpenCode for debugging/optimization
+          echo "=============================================="
+          echo "OPENCODE INPUT - COMMAND MODE"
+          echo "=============================================="
+          echo "System: $SYSTEM"
+          echo ""
+          echo "--- COMMAND ---"
+          echo "$COMMAND"
+          echo ""
+          echo "--- PROMPT ---"
+          echo "$PROMPT"
+          echo ""
+          echo "--- CONFIGURATION ---"
+          echo "Docker Image: jspannareif/opencode-mcp"
+          echo "Mode: run (non-interactive)"
+          echo ""
+          echo "--- OPENCODE CONFIG (opencode.json) ---"
+          cat ./opencode.json
+          echo ""
+          echo "Model: $(jq -r '.model // "not specified"' ./opencode.json)"
+          echo "MCP Servers: $(jq -r '.mcp | keys | join(", ")' ./opencode.json)"
+          echo ""
+          echo "=============================================="
+          echo ""
+
+          # Create OpenCode auth directory and inject auth.json
+          mkdir -p $HOME/.local/share/opencode
+          echo "$OPENCODE_AUTH_JSON" > $HOME/.local/share/opencode/auth.json
+
+          # Use gpt-4.1 for commands (has vision for "describe image" etc.)
+          docker run --rm \
+            -e ADO_MCP_AUTH_TOKEN \
+            -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/your-org" \
+            -e AZURE_DEVOPS_ORG="your-org" \
+            -e AZURE_DEVOPS_PROJECT="$SYSTEM_TEAMPROJECT" \
+            -e AZURE_DEVOPS_PAT="$ADO_MCP_AUTH_TOKEN" \
+            -e WORK_ITEM_ID="${{ parameters.workItemId }}" \
+            -v "$HOME/.local/share/opencode:/root/.local/share/opencode" \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            jspannareif/opencode-mcp run -m github-copilot/gpt-4.1 "$PROMPT" > command-result.md
+        displayName: 'Execute AI Command'
+        env:
+          OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)
+          ADO_MCP_AUTH_TOKEN: $(System.AccessToken)
+
+      - script: |
+          # Post response as work item comment
+          RESULT=$(cat command-result.md)
+
+          ./scripts/update-workitem.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --add-comment "$RESULT" \
+            --remove-tag "ai-working"
+        displayName: 'Post response to work item'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Notify on failure
+          if [ "$AGENT_JOBSTATUS" == "Failed" ]; then
+            ./scripts/send-teams-notification.sh \
+              --type "error" \
+              --work-item-id "${{ parameters.workItemId }}" \
+              --message "AI command execution failed" \
+              --pipeline-url "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)"
+
+            ./scripts/update-workitem.sh \
+              --work-item-id "${{ parameters.workItemId }}" \
+              --add-tag "ai-failed" \
+              --remove-tag "ai-working" \
+              --add-comment "## AI Command Failed
+
+          The AI command could not be executed. Check the pipeline logs for details.
+
+          [Pipeline Logs]($(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId))"
+          fi
+        displayName: 'Handle failure'
+        condition: failed()
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+          TEAMS_WEBHOOK_URL: $(TEAMS_WEBHOOK_URL)

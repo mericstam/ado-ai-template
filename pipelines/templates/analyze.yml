@@ -1,0 +1,167 @@
+# Analyze Stage Template
+# Fetches work item, runs OpenCode analysis, posts results
+
+parameters:
+  - name: workItemId
+    type: string
+  - name: dodConfig
+    type: string
+    default: 'default'
+
+jobs:
+  - job: AnalyzeWorkItem
+    displayName: 'Analyze Work Item'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - checkout: self
+        displayName: 'Checkout repository'
+
+      - script: |
+          chmod +x scripts/*.sh
+        displayName: 'Make scripts executable'
+
+      # OpenCode runs via Docker container - no installation needed
+
+      - script: |
+          # Remove ai-ready tag (ai-working already added in Process stage)
+          ./scripts/update-workitem.sh \
+            --work-item-id "$(WORK_ITEM_ID)" \
+            --remove-tag "ai-ready"
+        displayName: 'Update work item status'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Fetch work item context and download attachments
+          mkdir -p attachments
+          ./scripts/get-workitem-context.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --output "workitem-context.json" \
+            --attachments-dir "attachments"
+
+          # List downloaded attachments
+          echo "Attachments downloaded:"
+          ls -la attachments/ 2>/dev/null || echo "  (none)"
+        displayName: 'Fetch work item context and attachments'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Resolve which system configuration to use
+          SYSTEM=$(./scripts/resolve-system-config.sh --context-file workitem-context.json)
+          echo "Detected system: $SYSTEM"
+          echo "##vso[task.setvariable variable=DETECTED_SYSTEM]$SYSTEM"
+
+          # Copy OpenCode config to workspace root (where OpenCode expects it)
+          cp systems/_default/opencode.json ./opencode.json
+          if [ -f "systems/$SYSTEM/opencode.json" ]; then
+            echo "Note: System-specific opencode.json found but merging not yet implemented"
+          fi
+
+          # Load skills: always load default, then system-specific
+          rm -rf .opencode/skills
+          mkdir -p .opencode/skills
+
+          # Copy default skills
+          if [ -d "systems/_default/skills" ]; then
+            echo "Loading default skills..."
+            cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            ls .opencode/skills/
+          fi
+
+          # Copy system-specific skills (can override defaults)
+          if [ -d "systems/$SYSTEM/skills" ] && [ "$(ls -A systems/$SYSTEM/skills 2>/dev/null)" ]; then
+            echo "Loading skills from system: $SYSTEM"
+            cp -r systems/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
+          fi
+        displayName: 'Resolve system configuration'
+
+      - script: |
+          # Build complete prompt using system-specific context
+          SYSTEM="$(DETECTED_SYSTEM)"
+
+          PROMPT=$(./scripts/build-prompt.sh \
+            --mode analyze \
+            --system "$SYSTEM" \
+            --context workitem-context.json)
+
+          # Log what we're sending to OpenCode for debugging/optimization
+          echo "=============================================="
+          echo "OPENCODE INPUT - ANALYZE MODE"
+          echo "=============================================="
+          echo "System: $SYSTEM"
+          echo ""
+          echo "--- PROMPT ---"
+          echo "$PROMPT"
+          echo ""
+          echo "--- CONFIGURATION ---"
+          echo "Docker Image: jspannareif/opencode-mcp"
+          echo "Mode: run (non-interactive)"
+          echo ""
+          echo "--- OPENCODE CONFIG (opencode.json) ---"
+          cat ./opencode.json
+          echo ""
+          echo "Model: $(jq -r '.model // "not specified"' ./opencode.json)"
+          echo "MCP Servers: $(jq -r '.mcp | keys | join(", ")' ./opencode.json)"
+          echo ""
+          echo "=============================================="
+          echo ""
+
+          # Create OpenCode auth directory and inject auth.json
+          mkdir -p $HOME/.local/share/opencode
+          echo "$OPENCODE_AUTH_JSON" > $HOME/.local/share/opencode/auth.json
+
+          # Use gpt-4.1 for analysis (has vision for images/attachments)
+          docker run --rm \
+            -e ADO_MCP_AUTH_TOKEN \
+            -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/your-org" \
+            -v "$HOME/.local/share/opencode:/root/.local/share/opencode" \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            jspannareif/opencode-mcp run -m github-copilot/gpt-4.1 "$PROMPT" > analysis-result.md
+        displayName: 'Run OpenCode Analysis'
+        env:
+          OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)
+          ADO_MCP_AUTH_TOKEN: $(System.AccessToken)
+
+      - script: |
+          # Post analysis as work item comment
+          ANALYSIS=$(cat analysis-result.md)
+
+          ./scripts/update-workitem.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --add-comment "$ANALYSIS" \
+            --remove-tag "ai-working"
+        displayName: 'Post analysis to work item'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Notify on failure
+          if [ "$AGENT_JOBSTATUS" == "Failed" ]; then
+            ./scripts/send-teams-notification.sh \
+              --type "error" \
+              --work-item-id "${{ parameters.workItemId }}" \
+              --message "Analysis stage failed" \
+              --pipeline-url "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)"
+
+            ./scripts/update-workitem.sh \
+              --work-item-id "${{ parameters.workItemId }}" \
+              --add-tag "ai-failed" \
+              --remove-tag "ai-working"
+          fi
+        displayName: 'Handle failure'
+        condition: failed()
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+          TEAMS_WEBHOOK_URL: $(TEAMS_WEBHOOK_URL)

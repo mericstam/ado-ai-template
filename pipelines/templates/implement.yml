@@ -1,0 +1,252 @@
+# Implement Stage Template
+# Creates feature branch, implements solution, creates PR
+
+parameters:
+  - name: workItemId
+    type: string
+  - name: targetRepo
+    type: string
+  - name: dodConfig
+    type: string
+    default: 'default'
+
+jobs:
+  - job: ImplementSolution
+    displayName: 'Implement Solution'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - checkout: self
+        displayName: 'Checkout repository'
+        persistCredentials: true
+
+      - script: |
+          chmod +x scripts/*.sh
+        displayName: 'Make scripts executable'
+
+      # OpenCode runs via Docker container - no installation needed
+
+      # ai-working tag already added in Process stage
+
+      - script: |
+          # Configure git
+          git config user.name "AI Agent"
+          git config user.email "ai-agent@pipeline.local"
+
+          # Create feature branch
+          BRANCH_NAME="ai/${{ parameters.workItemId }}"
+          git checkout -b "$BRANCH_NAME"
+          echo "##vso[task.setvariable variable=BRANCH_NAME]$BRANCH_NAME"
+        displayName: 'Create feature branch'
+
+      - script: |
+          # Fetch work item context and download attachments
+          mkdir -p attachments
+          ./scripts/get-workitem-context.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --output "workitem-context.json" \
+            --attachments-dir "attachments"
+
+          # List downloaded attachments
+          echo "Attachments downloaded:"
+          ls -la attachments/ 2>/dev/null || echo "  (none)"
+        displayName: 'Fetch work item context and attachments'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Resolve which system configuration to use
+          SYSTEM=$(./scripts/resolve-system-config.sh --context-file workitem-context.json)
+          echo "Detected system: $SYSTEM"
+          echo "##vso[task.setvariable variable=DETECTED_SYSTEM]$SYSTEM"
+
+          # Copy OpenCode config to workspace root (where OpenCode expects it)
+          cp systems/_default/opencode.json ./opencode.json
+          if [ -f "systems/$SYSTEM/opencode.json" ]; then
+            echo "Note: System-specific opencode.json found but merging not yet implemented"
+          fi
+
+          # Load skills: always load default, then system-specific
+          rm -rf .opencode/skills
+          mkdir -p .opencode/skills
+
+          # Copy default skills
+          if [ -d "systems/_default/skills" ]; then
+            echo "Loading default skills..."
+            cp -r systems/_default/skills/* .opencode/skills/ 2>/dev/null || true
+            ls .opencode/skills/
+          fi
+
+          # Copy system-specific skills (can override defaults)
+          if [ -d "systems/$SYSTEM/skills" ] && [ "$(ls -A systems/$SYSTEM/skills 2>/dev/null)" ]; then
+            echo "Loading skills from system: $SYSTEM"
+            cp -r systems/$SYSTEM/skills/* .opencode/skills/ 2>/dev/null || true
+          fi
+        displayName: 'Resolve system configuration'
+
+      - script: |
+          # Build complete prompt using system-specific context
+          SYSTEM="$(DETECTED_SYSTEM)"
+
+          PROMPT=$(./scripts/build-prompt.sh \
+            --mode implement \
+            --system "$SYSTEM" \
+            --context workitem-context.json)
+
+          # Log what we're sending to OpenCode for debugging/optimization
+          echo "=============================================="
+          echo "OPENCODE INPUT - IMPLEMENT MODE"
+          echo "=============================================="
+          echo "System: $SYSTEM"
+          echo ""
+          echo "--- PROMPT ---"
+          echo "$PROMPT"
+          echo ""
+          echo "--- CONFIGURATION ---"
+          echo "Docker Image: jspannareif/opencode-mcp"
+          echo "Mode: run (non-interactive)"
+          echo ""
+          echo "--- OPENCODE CONFIG (opencode.json) ---"
+          cat ./opencode.json
+          echo ""
+          echo "Model: $(jq -r '.model // "not specified"' ./opencode.json)"
+          echo "MCP Servers: $(jq -r '.mcp | keys | join(", ")' ./opencode.json)"
+          echo ""
+          echo "=============================================="
+          echo ""
+
+          # Create OpenCode auth directory and inject auth.json
+          mkdir -p $HOME/.local/share/opencode
+          echo "$OPENCODE_AUTH_JSON" > $HOME/.local/share/opencode/auth.json
+
+          docker run --rm \
+            -e ADO_MCP_AUTH_TOKEN \
+            -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/your-org" \
+            -v "$HOME/.local/share/opencode:/root/.local/share/opencode" \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            jspannareif/opencode-mcp run "$PROMPT"
+        displayName: 'Run OpenCode Implementation'
+        env:
+          OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)
+          ADO_MCP_AUTH_TOKEN: $(System.AccessToken)
+
+      - script: |
+          # Run Definition of Done checks from system config
+          SYSTEM="$(DETECTED_SYSTEM)"
+          CONFIG_FILE="systems/$SYSTEM/config.yml"
+
+          if [ ! -f "$CONFIG_FILE" ]; then
+            CONFIG_FILE="systems/_default/config.yml"
+          fi
+
+          echo "Running quality gates from: $CONFIG_FILE"
+
+          # Extract and run build command
+          BUILD_CMD=$(grep -A1 "build:" "$CONFIG_FILE" | grep "command:" | cut -d'"' -f2)
+          if [ -n "$BUILD_CMD" ]; then
+            echo "Running build: $BUILD_CMD"
+            eval "$BUILD_CMD" || exit 1
+          fi
+
+          # Extract and run test command
+          TEST_CMD=$(grep -A1 "test:" "$CONFIG_FILE" | grep "command:" | cut -d'"' -f2)
+          if [ -n "$TEST_CMD" ]; then
+            echo "Running tests: $TEST_CMD"
+            eval "$TEST_CMD" || exit 1
+          fi
+
+          # Extract and run lint command
+          LINT_CMD=$(grep -A1 "lint:" "$CONFIG_FILE" | grep "command:" | cut -d'"' -f2)
+          if [ -n "$LINT_CMD" ]; then
+            echo "Running lint: $LINT_CMD"
+            eval "$LINT_CMD" || exit 1
+          fi
+
+          echo "All quality gates passed!"
+        displayName: 'Run Definition of Done checks'
+        continueOnError: false
+
+      - script: |
+          # Commit and push changes
+          git add -A
+          git commit -m "AI Agent: Implement work item #${{ parameters.workItemId }}
+
+          Automated implementation by AI Agent pipeline.
+          Work Item: ${{ parameters.workItemId }}"
+
+          # Push to remote
+          git push --set-upstream origin "$(BRANCH_NAME)"
+        displayName: 'Commit and push changes'
+        env:
+          GH_HOST: $(GH_HOST)
+          GH_TOKEN: $(GHE_TOKEN)
+
+      - script: |
+          # Create Pull Request using GitHub CLI
+          gh pr create \
+            --title "AI Agent: Work Item #${{ parameters.workItemId }}" \
+            --body "## Automated PR
+
+          This PR was created by the AI Agent pipeline.
+
+          **Work Item:** #${{ parameters.workItemId }}
+          **Pipeline:** [Build $(Build.BuildId)]($(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId))
+
+          Please review the changes and merge when ready." \
+            --base main \
+            --head "$(BRANCH_NAME)" > pr-url.txt
+
+          PR_URL=$(cat pr-url.txt)
+          echo "##vso[task.setvariable variable=PR_URL]$PR_URL"
+          echo "Created PR: $PR_URL"
+        displayName: 'Create Pull Request'
+        env:
+          GH_HOST: $(GH_HOST)
+          GH_TOKEN: $(GHE_TOKEN)
+
+      - script: |
+          # Update work item with PR link
+          PR_URL=$(cat pr-url.txt)
+
+          ./scripts/update-workitem.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --add-comment "## Implementation Complete
+
+          Pull Request created: $PR_URL
+
+          Please review and merge when ready." \
+            --remove-tag "ai-working" \
+            --remove-tag "ai-approved"
+        displayName: 'Update work item with PR link'
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+
+      - script: |
+          # Notify on failure
+          ./scripts/send-teams-notification.sh \
+            --type "error" \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --message "Implementation stage failed" \
+            --pipeline-url "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)"
+
+          ./scripts/update-workitem.sh \
+            --work-item-id "${{ parameters.workItemId }}" \
+            --add-tag "ai-failed" \
+            --remove-tag "ai-working" \
+            --add-comment "## Implementation Failed
+
+          The AI Agent encountered an error during implementation.
+          Please check the [pipeline logs]($(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)) for details."
+        displayName: 'Handle failure'
+        condition: failed()
+        env:
+          AZURE_DEVOPS_ORG: your-org
+          AZURE_DEVOPS_PROJECT: $(System.TeamProject)
+          AZURE_DEVOPS_PAT: $(System.AccessToken)
+          TEAMS_WEBHOOK_URL: $(TEAMS_WEBHOOK_URL)

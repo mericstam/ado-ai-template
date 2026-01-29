@@ -1,0 +1,30 @@
+# Example .NET System Configuration
+# .NET 8 on Azure
+
+name: example-dotnet
+description: Example .NET API system
+
+repositories:
+  # Explicit list of repository names (union with prefix)
+  names:
+    - "common-example-dotnet"
+  # Match all repos starting with prefix (union with names)
+  prefix: "example-dotnet-"
+
+detection:
+  tags:
+    - "example-dotnet"
+    - "example-dotnet-api"
+    - "example-dotnet-web"
+  area_path:
+    - "your-project\\Example .NET API"
+    - "your-project\\Example .NET API\\*"
+
+quality_gates:
+  build:
+    command: "dotnet build --configuration Release --warnaserror"
+  test:
+    command: "dotnet test --collect:'XPlat Code Coverage'"
+    coverage_min: 80
+  lint:
+    command: "dotnet format --verify-no-changes"
