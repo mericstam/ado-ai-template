@@ -236,11 +236,12 @@ jobs:
 
       - script: |
           SCRIPTS="$(SCRIPTS_DIR)"
-          # Post analysis as work item comment
+          # Post analysis as work item comment (upsert: update existing or create new)
           ANALYSIS=$(cat analysis-result.md)
 
           ./$SCRIPTS/update-workitem.sh \
             --work-item-id "${{ parameters.workItemId }}" \
+            --upsert-comment "<!-- AI-ANALYSIS -->" \
             --add-comment "$ANALYSIS" \
             --remove-tag "ai-working"
         displayName: 'Post analysis to work item'

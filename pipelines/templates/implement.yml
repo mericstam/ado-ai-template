@@ -327,11 +327,12 @@ jobs:
 
       - script: |
           SCRIPTS="$(SCRIPTS_DIR)"
-          # Update work item with PR link
+          # Update work item with PR link (upsert: update existing or create new)
           PR_URL=$(cat pr-url.txt)
 
           ./$SCRIPTS/update-workitem.sh \
             --work-item-id "${{ parameters.workItemId }}" \
+            --upsert-comment "<!-- AI-IMPLEMENTATION -->" \
             --add-comment "## Implementation Complete
 
           Pull Request created: $PR_URL

@@ -16,6 +16,7 @@ LIST_COMMENTS=false
 DELETE_COMMENT_ID=""
 DELETE_AI_COMMENTS=false
 UPDATE_COMMENT_ID=""
+UPSERT_MARKER=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -70,6 +71,12 @@ while [[ $# -gt 0 ]]; do
         --update-comment)
             # Update an existing comment (use with --add-comment for new text)
             UPDATE_COMMENT_ID="$2"
+            shift 2
+            ;;
+        --upsert-comment)
+            # Upsert: find comment with marker and update, or create new
+            # Use with --add-comment for the content
+            UPSERT_MARKER="$2"
             shift 2
             ;;
         *)
@@ -467,8 +474,24 @@ if [ -n "$DELETE_COMMENT_ID" ]; then
     delete_comment "$DELETE_COMMENT_ID"
 fi
 
+# Upsert comment: find existing with marker and update, or create new
+if [ -n "$UPSERT_MARKER" ] && [ -n "$ADD_COMMENT" ]; then
+    # Search for existing comment with the marker
+    EXISTING_COMMENT_ID=$(get_comment_id_with_pattern "$UPSERT_MARKER")
+
+    # Prepend marker to content (HTML comment - invisible in UI)
+    COMMENT_WITH_MARKER="${UPSERT_MARKER}
+${ADD_COMMENT}"
+
+    if [ -n "$EXISTING_COMMENT_ID" ]; then
+        echo "Updating existing comment $EXISTING_COMMENT_ID (found marker: $UPSERT_MARKER)"
+        update_comment "$EXISTING_COMMENT_ID" "$COMMENT_WITH_MARKER"
+    else
+        echo "Creating new comment with marker: $UPSERT_MARKER"
+        add_comment "$COMMENT_WITH_MARKER"
+    fi
 # Update existing comment (use with --add-comment for new text)
-if [ -n "$UPDATE_COMMENT_ID" ] && [ -n "$ADD_COMMENT" ]; then
+elif [ -n "$UPDATE_COMMENT_ID" ] && [ -n "$ADD_COMMENT" ]; then
     update_comment "$UPDATE_COMMENT_ID" "$ADD_COMMENT"
 # Add new comment (only if not updating)
 elif [ -n "$ADD_COMMENT" ]; then
