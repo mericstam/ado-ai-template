@@ -148,6 +148,77 @@ else
     fi
 fi
 
+# Clear and load agents fresh (layered like skills)
+rm -rf "$WORKSPACE/.opencode/agents"
+mkdir -p "$WORKSPACE/.opencode/agents"
+
+if [ "$SUBMODULE_MODE" = "true" ]; then
+    # 1. Template default agents
+    TEMPLATE_AGENTS_DIR="$REPO_ROOT/template/systems/_default/agents"
+    if [ -d "$TEMPLATE_AGENTS_DIR" ] && [ "$(ls -A "$TEMPLATE_AGENTS_DIR" 2>/dev/null)" ]; then
+        echo -e "${GREEN}Loading template default agents:${NC}"
+        cp -r "$TEMPLATE_AGENTS_DIR"/* "$WORKSPACE/.opencode/agents/" 2>/dev/null || true
+        for agent in "$TEMPLATE_AGENTS_DIR"/*; do
+            if [ -f "$agent" ]; then
+                echo -e "  - $(basename "$agent" .md)"
+            fi
+        done
+    fi
+
+    # 2. Local default agents (organization-specific, can override template)
+    LOCAL_AGENTS_DIR="$REPO_ROOT/systems/_default/agents"
+    if [ -d "$LOCAL_AGENTS_DIR" ] && [ "$(ls -A "$LOCAL_AGENTS_DIR" 2>/dev/null)" ]; then
+        echo -e "${GREEN}Loading organization-specific agents:${NC}"
+        cp -r "$LOCAL_AGENTS_DIR"/* "$WORKSPACE/.opencode/agents/" 2>/dev/null || true
+        for agent in "$LOCAL_AGENTS_DIR"/*; do
+            if [ -f "$agent" ]; then
+                echo -e "  - $(basename "$agent" .md)"
+            fi
+        done
+    fi
+
+    # 3. System-specific agents from both locations
+    if [ -n "$SYSTEM" ]; then
+        for systems_dir in "$REPO_ROOT/template/systems" "$REPO_ROOT/systems"; do
+            AGENTS_DIR="$systems_dir/$SYSTEM/agents"
+            if [ -d "$AGENTS_DIR" ] && [ "$(ls -A "$AGENTS_DIR" 2>/dev/null)" ]; then
+                echo -e "${GREEN}Loading agents from $(basename "$systems_dir")/$SYSTEM:${NC}"
+                cp -r "$AGENTS_DIR"/* "$WORKSPACE/.opencode/agents/" 2>/dev/null || true
+                for agent in "$AGENTS_DIR"/*; do
+                    if [ -f "$agent" ]; then
+                        echo -e "  - $(basename "$agent" .md)"
+                    fi
+                done
+            fi
+        done
+    fi
+else
+    # Standalone mode: simple loading
+    DEFAULT_AGENTS_DIR="$REPO_ROOT/systems/_default/agents"
+    if [ -d "$DEFAULT_AGENTS_DIR" ] && [ "$(ls -A "$DEFAULT_AGENTS_DIR" 2>/dev/null)" ]; then
+        echo -e "${GREEN}Loading default agents:${NC}"
+        cp -r "$DEFAULT_AGENTS_DIR"/* "$WORKSPACE/.opencode/agents/" 2>/dev/null || true
+        for agent in "$DEFAULT_AGENTS_DIR"/*; do
+            if [ -f "$agent" ]; then
+                echo -e "  - $(basename "$agent" .md)"
+            fi
+        done
+    fi
+
+    if [ -n "$SYSTEM" ]; then
+        AGENTS_DIR="$REPO_ROOT/systems/$SYSTEM/agents"
+        if [ -d "$AGENTS_DIR" ] && [ "$(ls -A "$AGENTS_DIR" 2>/dev/null)" ]; then
+            echo -e "${GREEN}Loading agents from system: $SYSTEM${NC}"
+            cp -r "$AGENTS_DIR"/* "$WORKSPACE/.opencode/agents/" 2>/dev/null || true
+            for agent in "$AGENTS_DIR"/*; do
+                if [ -f "$agent" ]; then
+                    echo -e "  - $(basename "$agent" .md)"
+                fi
+            done
+        fi
+    fi
+fi
+
 # Show model being used
 MODEL=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$WORKSPACE/opencode.json" | cut -d'"' -f4)
 echo -e "${GREEN}Model: ${MODEL:-not specified}${NC}"

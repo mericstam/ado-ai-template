@@ -144,6 +144,45 @@ jobs:
 
           echo "Loaded skills:"
           ls .opencode/skills/ 2>/dev/null || echo "  (none)"
+
+          # Load agents in layers (same pattern as skills)
+          rm -rf .opencode/agents
+          mkdir -p .opencode/agents
+
+          if [ "$SUBMODULE_MODE" = "true" ]; then
+            # 1. Template default agents
+            if [ -d "template/systems/_default/agents" ]; then
+              echo "Loading template default agents..."
+              cp -r template/systems/_default/agents/* .opencode/agents/ 2>/dev/null || true
+            fi
+
+            # 2. Local default agents (can override template)
+            if [ -d "systems/_default/agents" ]; then
+              echo "Loading organization-specific agents..."
+              cp -r systems/_default/agents/* .opencode/agents/ 2>/dev/null || true
+            fi
+
+            # 3. System-specific agents from both locations
+            for systems_dir in template/systems systems; do
+              if [ -d "$systems_dir/$SYSTEM/agents" ] && [ "$(ls -A $systems_dir/$SYSTEM/agents 2>/dev/null)" ]; then
+                echo "Loading agents from $systems_dir/$SYSTEM..."
+                cp -r $systems_dir/$SYSTEM/agents/* .opencode/agents/ 2>/dev/null || true
+              fi
+            done
+          else
+            # Standalone mode
+            if [ -d "systems/_default/agents" ]; then
+              echo "Loading default agents..."
+              cp -r systems/_default/agents/* .opencode/agents/ 2>/dev/null || true
+            fi
+            if [ -d "systems/$SYSTEM/agents" ] && [ "$(ls -A systems/$SYSTEM/agents 2>/dev/null)" ]; then
+              echo "Loading agents from system: $SYSTEM"
+              cp -r systems/$SYSTEM/agents/* .opencode/agents/ 2>/dev/null || true
+            fi
+          fi
+
+          echo "Loaded agents:"
+          ls .opencode/agents/ 2>/dev/null || echo "  (none)"
         displayName: 'Resolve system configuration'
 
       - script: |
@@ -185,13 +224,14 @@ jobs:
           mkdir -p $HOME/.local/share/opencode
           echo "$OPENCODE_AUTH_JSON" > $HOME/.local/share/opencode/auth.json
 
+          # Run OpenCode with implement agent
           docker run --rm \
             -e ADO_MCP_AUTH_TOKEN \
             -e AZURE_DEVOPS_ORG_URL="https://dev.azure.com/$AZURE_DEVOPS_ORG" \
             -v "$HOME/.local/share/opencode:/root/.local/share/opencode" \
             -v "$(pwd):/workspace" \
             -w /workspace \
-            jspannareif/opencode-mcp run "$PROMPT"
+            jspannareif/opencode-mcp run --agent implement "$PROMPT"
         displayName: 'Run OpenCode Implementation'
         env:
           OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)
