@@ -243,17 +243,23 @@ jobs:
           DOCKER_ARGS="$DOCKER_ARGS -v $(pwd):/workspace"
           DOCKER_ARGS="$DOCKER_ARGS -w /workspace"
 
-          # Add CA certificate if available (for internal HTTPS endpoints)
-          # Organizations can provide certs/root-ca.crt for internal SSL/TLS
-          if [ -f "certs/root-ca.crt" ]; then
-            echo "Mounting organization CA certificate..."
-            DOCKER_ARGS="$DOCKER_ARGS -v $(pwd)/certs/root-ca.crt:/usr/local/share/ca-certificates/org-root-ca.crt"
-            DOCKER_ARGS="$DOCKER_ARGS -e NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/org-root-ca.crt"
+          # Add CA certificates if available (for internal HTTPS endpoints)
+          # Organizations can provide certs/*.crt files for internal SSL/TLS
+          CA_MOUNT=""
+          if [ -d "certs" ] && ls certs/*.crt 1>/dev/null 2>&1; then
+            echo "Mounting organization CA certificates..."
+            CA_MOUNT="-v $(pwd)/certs:/usr/local/share/ca-certificates/org:ro"
           fi
 
           # Run OpenCode with analyze agent
-          docker run $DOCKER_ARGS \
-            ${{ parameters.dockerImage }} run --agent analyze "$PROMPT" > analysis-result.md
+          # If CA certs mounted, run update-ca-certificates first
+          if [ -n "$CA_MOUNT" ]; then
+            docker run $DOCKER_ARGS $CA_MOUNT \
+              ${{ parameters.dockerImage }} sh -c "update-ca-certificates 2>/dev/null; opencode run --agent analyze \"\$0\"" "$PROMPT" > analysis-result.md
+          else
+            docker run $DOCKER_ARGS \
+              ${{ parameters.dockerImage }} run --agent analyze "$PROMPT" > analysis-result.md
+          fi
         displayName: 'Run OpenCode Analysis'
         env:
           OPENCODE_AUTH_JSON: $(OPENCODE_AUTH_JSON)

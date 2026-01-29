@@ -250,11 +250,15 @@ mkdir -p "$TEMP_DIR"
 DOCKER_ARGS+=(-v "$TEMP_DIR:/output")
 echo -e "${GREEN}Output directory:${NC} $TEMP_DIR (mounted at /output in container)"
 
-# Mount root CA certificate if available (for internal HTTPS endpoints)
-CERT_FILE="$REPO_ROOT/certs/root-ca.crt"
-if [ -f "$CERT_FILE" ]; then
-    DOCKER_ARGS+=(-v "$CERT_FILE:/usr/local/share/ca-certificates/org-root-ca.crt")
-    DOCKER_ARGS+=(-e "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/org-root-ca.crt")
+# Mount CA certificates if available (for internal HTTPS endpoints)
+# Supports multiple .crt files in certs/ directory
+CERTS_DIR="$REPO_ROOT/certs"
+CA_CERTS_FOUND=false
+if [ -d "$CERTS_DIR" ] && ls "$CERTS_DIR"/*.crt 1>/dev/null 2>&1; then
+    echo -e "${GREEN}Mounting organization CA certificates:${NC}"
+    ls "$CERTS_DIR"/*.crt | while read cert; do echo "  - $(basename "$cert")"; done
+    DOCKER_ARGS+=(-v "$CERTS_DIR:/usr/local/share/ca-certificates/org:ro")
+    CA_CERTS_FOUND=true
 fi
 
 # Environment variables
@@ -271,10 +275,20 @@ if [ ${#PROMPT_ARGS[@]} -gt 0 ]; then
     PROMPT="${PROMPT_ARGS[*]}"
     echo -e "${GREEN}Running with prompt:${NC} $PROMPT"
     echo ""
-    docker "${DOCKER_ARGS[@]}" run "$PROMPT"
+    if [ "$CA_CERTS_FOUND" = true ]; then
+        # Run update-ca-certificates first to install org certs
+        docker "${DOCKER_ARGS[@]}" sh -c "update-ca-certificates 2>/dev/null; opencode run \"\$0\"" "$PROMPT"
+    else
+        docker "${DOCKER_ARGS[@]}" run "$PROMPT"
+    fi
 else
     # Interactive mode
     echo -e "${GREEN}Starting interactive session...${NC}"
     echo ""
-    docker "${DOCKER_ARGS[@]}"
+    if [ "$CA_CERTS_FOUND" = true ]; then
+        # Run update-ca-certificates first, then start interactive opencode
+        docker "${DOCKER_ARGS[@]}" sh -c "update-ca-certificates 2>/dev/null; exec opencode"
+    else
+        docker "${DOCKER_ARGS[@]}"
+    fi
 fi
