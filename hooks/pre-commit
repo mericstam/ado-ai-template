@@ -1,0 +1,22 @@
+#!/bin/bash
+# Pre-commit hook for the template repository
+# Prevents organization-specific values from being committed
+#
+# Install: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or for submodule: cp hooks/pre-commit ../.git/modules/template/hooks/pre-commit
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the check script relative to hook location
+if [ -f "$SCRIPT_DIR/../scripts/check-no-org-specific.sh" ]; then
+    # Installed in .git/hooks/
+    CHECK_SCRIPT="$SCRIPT_DIR/../scripts/check-no-org-specific.sh"
+elif [ -f "$SCRIPT_DIR/../../template/scripts/check-no-org-specific.sh" ]; then
+    # Installed in .git/modules/template/hooks/ (submodule)
+    CHECK_SCRIPT="$SCRIPT_DIR/../../template/scripts/check-no-org-specific.sh"
+else
+    echo "Warning: check-no-org-specific.sh not found, skipping check"
+    exit 0
+fi
+
+exec "$CHECK_SCRIPT" --staged

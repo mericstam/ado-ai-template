@@ -273,6 +273,57 @@ See `examples/azure-pipelines.yml` for a complete example.
 - OpenCode CLI (runs via Docker)
 - `COPILOT_GITHUB_TOKEN` - GitHub Enterprise Copilot token
 
+## Custom Docker Image
+
+The default image `ghcr.io/opencode-ai/opencode:latest` contains only the OpenCode CLI. You may need a custom image if your pipelines require additional tools.
+
+### When You Need a Custom Image
+
+| Scenario | Required Tools |
+|----------|----------------|
+| MCP servers | Node.js, npm |
+| Work item scripts with JSON parsing | jq |
+| Document conversion | pandoc |
+| Custom CA certificates | ca-certificates |
+
+### Example Dockerfile
+
+```dockerfile
+# docker/Dockerfile
+FROM ghcr.io/opencode-ai/opencode:latest
+
+# Add tools for MCP servers and scripts
+RUN apk add --no-cache nodejs npm bash curl jq pandoc
+
+# Verify installation
+RUN node --version && npm --version && jq --version
+```
+
+### Build and Push
+
+```bash
+cd docker
+docker build -t your-org/opencode-custom:latest .
+docker push your-org/opencode-custom:latest
+```
+
+### Configure Pipeline
+
+Override the default image in your `azure-pipelines.yml`:
+
+```yaml
+variables:
+  DOCKER_IMAGE: 'your-org/opencode-custom'
+```
+
+Or pass as parameter when using the template:
+
+```yaml
+- template: template/pipelines/templates/analyze.yml
+  parameters:
+    dockerImage: 'your-org/opencode-custom'
+```
+
 ## Status
 
 | Category | Implemented | Planned |
@@ -317,3 +368,48 @@ See [System Config Plan](docs/SYSTEM-CONFIG-PLAN.md) for detailed roadmap.
 2. Configure webhooks for pilot team's project
 3. Train developers on workflow (30 min session)
 4. Monitor and collect metrics
+
+## Contributing
+
+### Pre-commit Hook
+
+This template must remain organization-agnostic. A pre-commit hook prevents accidental commits of organization-specific values.
+
+**Install the hook:**
+
+```bash
+# For standalone clone
+cp hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+
+# For submodule (run from parent repo)
+cp template/hooks/pre-commit .git/modules/template/hooks/pre-commit
+chmod +x .git/modules/template/hooks/pre-commit
+```
+
+**Manual check:**
+
+```bash
+./scripts/check-no-org-specific.sh
+```
+
+### What Gets Blocked
+
+The hook prevents commits containing organization-specific values. To add new patterns, edit `scripts/check-no-org-specific.sh`:
+
+```bash
+FORBIDDEN_PATTERNS=(
+    "jspannareif"
+    "mobility-CTP"
+    "if-it"
+    # Add more patterns here
+)
+```
+
+### Proper Separation
+
+| Content | Location |
+|---------|----------|
+| Generic code with placeholders (`your-org`) | This template |
+| Organization-specific values | Parent repository |
+| Custom Docker image references | Parent repo's `azure-pipelines.yml` |

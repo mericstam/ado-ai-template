@@ -1,0 +1,24 @@
+# Example: Custom OpenCode image with additional tools
+#
+# The base image contains only the OpenCode CLI. Add tools your pipelines need.
+#
+# Build:  docker build -t your-org/opencode-custom:latest -f Dockerfile.example .
+# Push:   docker push your-org/opencode-custom:latest
+
+FROM ghcr.io/opencode-ai/opencode:latest
+
+# Common tools for MCP servers and pipeline scripts
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    bash \
+    curl \
+    jq \
+    pandoc
+
+# Verify installation
+RUN node --version && npm --version && jq --version
+
+# Optional: Add custom CA certificates
+# COPY certs/*.crt /usr/local/share/ca-certificates/
+# RUN update-ca-certificates

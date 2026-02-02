@@ -96,7 +96,7 @@ The `--dry-run` flag shows everything that would be sent to OpenCode without act
 [INFO] Scripts directory: template/scripts
 [INFO] Submodule mode: true
 [INFO] Mode: analyze
-[INFO] Docker image: jspannareif/opencode-mcp:latest
+[INFO] Docker image: ghcr.io/opencode-ai/opencode:latest
 
 ==============================================
 7. CONFIGURATION SUMMARY
@@ -106,7 +106,7 @@ Mode:           analyze
 System:         _default
 Submodule:      true
 Work Item ID:   1373926
-Docker Image:   jspannareif/opencode-mcp:latest
+Docker Image:   ghcr.io/opencode-ai/opencode:latest
 Skills:         brainstorming,debugging,tdd,...
 Agents:         analyze,command,implement
 
@@ -169,7 +169,7 @@ Check if CA certificates are needed for internal endpoints:
 
 ```bash
 # Test without certs
-docker run --rm jspannareif/opencode-mcp:latest --version
+docker run --rm ghcr.io/opencode-ai/opencode:latest --version
 
 # Test with certs
 ./scripts/run-local.sh --dry-run  # Shows if certs are detected
