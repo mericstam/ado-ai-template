@@ -741,11 +741,11 @@ if [ -n "$CA_MOUNT" ]; then
             cp /tmp/org-certs/*.crt /usr/local/share/ca-certificates/ 2>/dev/null
             update-ca-certificates 2>/dev/null
             export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-            opencode run --agent "$1" "$2"
+            opencode run --agent "$1" --max-turns 25 "$2"
         ' _ "$MODE" "$PROMPT" > "$REPO_ROOT/result.md"
 else
     docker run $DOCKER_ARGS \
-        "$DOCKER_IMAGE" run --agent "$MODE" "$PROMPT" > "$REPO_ROOT/result.md"
+        "$DOCKER_IMAGE" run --agent "$MODE" --max-turns 25 "$PROMPT" > "$REPO_ROOT/result.md"
 fi
 
 section "10. RESULT"
