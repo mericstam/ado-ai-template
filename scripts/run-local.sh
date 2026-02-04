@@ -735,17 +735,20 @@ fi
 # Must use --entrypoint to override container's default entrypoint
 # Set NODE_EXTRA_CA_CERTS so Node.js also trusts the certs
 # Use $1 and $2 for agent mode and prompt (underscore is placeholder for $0)
+# Timeout: 10 minutes (600s) to prevent hanging on API errors (see: github.com/anomalyco/opencode/issues/8203)
 if [ -n "$CA_MOUNT" ]; then
     docker run $DOCKER_ARGS $CA_MOUNT --entrypoint sh \
         "$DOCKER_IMAGE" -c '
             cp /tmp/org-certs/*.crt /usr/local/share/ca-certificates/ 2>/dev/null
             update-ca-certificates 2>/dev/null
             export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-            opencode run --agent "$1" "$2"
+            timeout 600 opencode run --agent "$1" "$2"
         ' _ "$MODE" "$PROMPT" > "$REPO_ROOT/result.md"
 else
-    docker run $DOCKER_ARGS \
-        "$DOCKER_IMAGE" run --agent "$MODE" "$PROMPT" > "$REPO_ROOT/result.md"
+    docker run $DOCKER_ARGS --entrypoint sh \
+        "$DOCKER_IMAGE" -c '
+            timeout 600 opencode run --agent "$1" "$2"
+        ' _ "$MODE" "$PROMPT" > "$REPO_ROOT/result.md"
 fi
 
 section "10. RESULT"
